@@ -1,39 +1,39 @@
-# lab-backend
+# lab-backend (cPanel)
 
-API REST del sistema de laboratorio clínico — **Sprints 0–9 completos**.
+API REST del sistema de laboratorio clínico — **Sprints 0–9 completos**, adaptada para despliegue en **hosting compartido cPanel**.
 
-Stack: Node.js 20 · NestJS 10 · TypeScript 5 (estricto) · Prisma 6 · PostgreSQL 16 · pino · Swagger · Puppeteer (PDF) · EventEmitter2.
+Stack: Node.js 20 · NestJS 10 · TypeScript 5 (estricto) · Prisma 6 · **MySQL/MariaDB** · pino · Swagger · **pdfmake (PDF sin navegador)** · EventEmitter2.
+
+> Esta variante reemplaza PostgreSQL → MySQL, Puppeteer/Chromium → pdfmake, y Docker/Railway → Phusion Passenger, para correr en cPanel sin binarios externos.
 
 ---
 
 ## Requisitos
 
-- **Node.js 20** (mira `.nvmrc`).
-- **pnpm 9** (`corepack enable && corepack prepare pnpm@9 --activate`).
-- **Docker Desktop** (para Postgres en local).
-- **Chrome / Chromium** en el host (saltamos la descarga interna de Puppeteer; ver `CHROMIUM_PATH` en `.env.example`).
+- **Node.js 20** (en cPanel se selecciona en *Setup Node.js App*).
+- **pnpm 9** (`corepack enable && corepack prepare pnpm@9 --activate`) — en local. En cPanel se usa `npm install` desde la UI.
+- **MySQL / MariaDB** — base de datos creada desde *MySQL® Databases* en cPanel.
 
-## Arranque rápido (desarrollo)
+No requiere Docker ni Chrome: el PDF se genera 100% en Node con `pdfmake`.
+
+## Arranque rápido (desarrollo local)
 
 ```powershell
-# 1. Instalar deps (con system CA si estás detrás de un proxy corporativo)
+# 1. Instalar deps
 $env:NODE_OPTIONS="--use-system-ca"
 pnpm install
 
-# 2. Copiar variables de entorno y editar JWT_SECRET / CHROMIUM_PATH
+# 2. Copiar variables de entorno y editar JWT_SECRET / DATABASE_URL
 Copy-Item .env.example .env
 
-# 3. Arrancar Postgres en Docker (puerto 5434)
-docker compose up -d
-
-# 4. Generar el cliente Prisma y aplicar migraciones
+# 3. Generar el cliente Prisma y aplicar el esquema a MySQL
 pnpm db:generate
-pnpm db:migrate:deploy
+pnpm db:migrate:deploy   # o `pnpm db:push` si aún no hay migraciones MySQL
 
-# 5. Sembrar admin + lab_config + catálogo demo
+# 4. Sembrar admin + lab_config + catálogo demo
 pnpm db:seed
 
-# 6. Arrancar la API en modo dev
+# 5. Arrancar la API en modo dev
 pnpm start:dev
 ```
 
@@ -59,10 +59,10 @@ Credenciales del admin sembrado (configurables por `SEED_ADMIN_EMAIL` / `SEED_AD
 | 3 | `catalog/panels`, `catalog/import` | paneles + import XLSX (dry-run + confirm) |
 | 4 | `patients`, `references`, `professionals`, `lab-config` | CRUD + portal access + firmas + logo |
 | 5 | `orders`, `results` | máquina de estados + bulk-save autosave |
-| 6 | `reports`, `verify` | PDF Puppeteer + verificación pública con QR |
+| 6 | `reports`, `verify` | **PDF con pdfmake** + verificación pública con QR |
 | 7 | `portal` (`/me/...`, `/me/reference/...`) | portales paciente y referencia |
 | 8 | `audit`, `dashboards` | trazas + KPIs (`/audit`, `/admin/dashboard/overview`, `/admin/dashboard/timeline`) |
-| 9 | hardening, e2e tests, deploy | rate limiting endurecido, suite Jest e2e, docker-compose.prod, scripts de backup |
+| 9 | hardening, e2e tests, deploy | rate limiting endurecido, suite Jest e2e |
 
 Todos los errores siguen el formato **RFC 7807** (`application/problem+json`).
 
@@ -76,7 +76,7 @@ Todos los errores siguen el formato **RFC 7807** (`application/problem+json`).
 | `pnpm lint` | Lint con auto-fix |
 | `pnpm typecheck` | `tsc --noEmit` |
 | `pnpm test` | Tests unitarios (jest) |
-| `pnpm test:e2e` | Suite e2e contra Postgres real (admin sembrado) |
+| `pnpm test:e2e` | Suite e2e contra MySQL real (admin sembrado) |
 | `pnpm db:migrate` | Migración dev (genera SQL y aplica) |
 | `pnpm db:migrate:deploy` | Aplica migraciones pendientes (CI / prod) |
 | `pnpm db:seed` | Carga admin + lab_config + categorías + test demo |
@@ -88,17 +88,19 @@ Ver `.env.example`. Validación con Zod en `src/config/env.validation.ts`; si fa
 
 Variables más importantes:
 
-- `DATABASE_URL` — URL de Postgres.
+- `DATABASE_URL` — URL de MySQL. Formato: `mysql://usuario:password@localhost:3306/nombre_bd`.
 - `JWT_SECRET` — mínimo 32 caracteres.
 - `FRONT_URL` — origen permitido por CORS.
 - `PUBLIC_VERIFY_URL` — URL pública del frontend donde se sirve `/verificar/:token` (usada en el QR del PDF).
-- `CHROMIUM_PATH` — ruta al ejecutable de Chrome/Chromium (Puppeteer no lo descarga).
+- `STORAGE_DRIVER` / `STORAGE_PATH` — almacenamiento local de logo, firmas y PDFs.
 - `RESEND_API_KEY` — opcional, para correos transaccionales.
 - `LOG_LEVEL` — `info` por defecto; `debug` para depurar.
 
+> Ya no existe `CHROMIUM_PATH`: pdfmake no usa navegador.
+
 ## Tests end-to-end
 
-Los specs en `test/*.e2e-spec.ts` se ejecutan contra la **DB de desarrollo** (no monta una DB aislada): asumen que las migraciones están aplicadas y el admin sembrado. Cada spec limpia sus propios datos en `afterAll`.
+Los specs en `test/*.e2e-spec.ts` se ejecutan contra la **DB de desarrollo** (no monta una DB aislada): asumen que el esquema está aplicado y el admin sembrado. Cada spec limpia sus propios datos en `afterAll`.
 
 ```powershell
 $env:NODE_OPTIONS="--use-system-ca"
@@ -113,57 +115,54 @@ Coverage actual:
 
 El throttler se desactiva automáticamente cuando `NODE_ENV=test` (ver `src/shared/guards/test-aware-throttler.guard.ts`).
 
-## Despliegue
+## Despliegue en cPanel
 
-### Opción A — Railway / Fly.io / Render (recomendado para empezar)
+### 1. Crear la base de datos MySQL
 
-1. Crear servicio nuevo apuntando a este repo.
-2. Adjuntar el plugin de Postgres del proveedor; copiar `DATABASE_URL` a las env vars.
-3. Configurar el resto de variables (`JWT_SECRET`, `FRONT_URL`, `PUBLIC_VERIFY_URL`, `CHROMIUM_PATH=/usr/bin/chromium-browser`, `RESEND_API_KEY` si hay correos, etc.).
-4. Railway detecta `railway.json` y usa el `Dockerfile`. El `startCommand` aplica migraciones antes de arrancar la API.
-5. Verificar `/api/v1/health` desde la URL pública del servicio.
-6. Correr `scripts/post-deploy-check.sh` para validar el smoke set (login admin, catálogo, dashboard).
+En cPanel → **MySQL® Databases**:
+1. Crear una base de datos (ej. `usuario_lab`).
+2. Crear un usuario MySQL y asignarle **todos los privilegios** sobre esa base.
+3. Anotar el `DATABASE_URL`: `mysql://usuario_lab:PASSWORD@localhost:3306/usuario_lab`.
 
-### Opción B — VPS / servidor on-prem
+### 2. Subir el código
 
-Usar `docker-compose.prod.yml`:
+Sube el repo (sin `node_modules` ni `dist`) a una carpeta fuera de `public_html`, por ejemplo `~/apps/lab-backend`.
 
-```bash
-# 1. Copiar y completar el .env.prod
-cp .env.example .env.prod
-# Editar y completar: POSTGRES_PASSWORD, JWT_SECRET, APP_URL, FRONT_URL, etc.
+### 3. Crear la aplicación Node.js
 
-# 2. Levantar postgres + api
-docker compose -f docker-compose.prod.yml --env-file .env.prod up -d
+En cPanel → **Setup Node.js App**:
+- **Node version:** 20.x
+- **Application root:** `apps/lab-backend`
+- **Application startup file:** `app.js` ← Passenger lo detecta automáticamente y carga `dist/main.js`.
+- Crear las variables de entorno (las mismas del `.env`) desde la sección *Environment variables* del panel.
 
-# 3. Verificar healthcheck (espera ~30s al primer arranque)
-docker compose -f docker-compose.prod.yml ps
-docker compose -f docker-compose.prod.yml logs -f api
+### 4. Instalar, compilar y migrar
 
-# 4. Smoke check post-deploy
-API_URL=http://localhost:3000 ADMIN_EMAIL=admin@... ADMIN_PASSWORD=... \
-  ./scripts/post-deploy-check.sh
-```
-
-El compose:
-- No expone Postgres al host por defecto (sólo red interna). Si querés acceso externo, descomentá `ports: ['5432:5432']`.
-- Usa volúmenes nombrados (`lab-pgdata-prod`, `lab-storage-prod`) para que `docker compose down` no borre datos. Para wipear DB hay que `docker volume rm` explícito.
-- Incluye un sidecar de backup comentado (cron simple en bash). Para algo serio, usá pgBackRest o el backup gestionado del proveedor de tu DB.
-
-### Backup y restore
-
-Scripts en `scripts/`:
+Desde el botón **Run NPM Install**, o por terminal SSH dentro del virtualenv que cPanel crea:
 
 ```bash
-# Backup manual (gzip + rotación de 14 días)
-./scripts/backup.sh                # usa .env por defecto
-./scripts/backup.sh .env.prod      # con otro archivo
+# Entrar al entorno de la app (cPanel muestra el comando exacto, ej.:)
+source ~/nodevenv/apps/lab-backend/20/bin/activate
+cd ~/apps/lab-backend
 
-# Restore (pide confirmación interactiva)
-./scripts/restore.sh backups/lab_20260521_120000.sql.gz
+npm install
+npm run build
+npx prisma migrate deploy   # o `npx prisma db push`
+node dist/prisma/seed.js     # admin + lab_config + catálogo demo
 ```
 
-Los archivos se guardan en `backups/` y se rotan automáticamente.
+### 5. Reiniciar y verificar
+
+Pulsa **Restart** en *Setup Node.js App* y verifica:
+
+- `https://api.tudominio.com/api/v1/health`
+- Activa **SSL (Let's Encrypt)** sobre el dominio/subdominio de la API.
+
+### Notas de la adaptación a cPanel
+
+- **`app.js`** es el punto de entrada para **Phusion Passenger** (el gestor de Node que usa cPanel). Mantiene el proceso vivo; no necesitas pm2 ni Docker.
+- **PDF con pdfmake:** generación pura en Node, sin Chromium. El logo y las firmas se embeben en base64 leyéndolos del storage local.
+- **MySQL:** el esquema Prisma usa `VarChar(36)` para IDs (UUID), `DateTime(3)` para timestamps y `Json` para metadata. Las unicidades parciales de Postgres se validan a nivel de servicio.
 
 ## Hardening de seguridad
 
@@ -182,7 +181,7 @@ Configurado out-of-the-box:
 ```
 lab-backend/
 ├── prisma/
-│   ├── schema.prisma            ← 25+ modelos (users, patients, orders, audit_log, ...)
+│   ├── schema.prisma            ← 25+ modelos, datasource = mysql
 │   ├── migrations/              ← migraciones SQL versionadas
 │   └── seed.ts                  ← admin + lab_config + categorías + test demo
 ├── src/
@@ -200,7 +199,7 @@ lab-backend/
 │   │   ├── portal/              ← /me/* y /me/reference/*
 │   │   ├── professionals/       ← CRUD + firma
 │   │   ├── references/          ← CRUD + usuarios anidados
-│   │   ├── reports/             ← Puppeteer + Handlebars + QR + /verify/:token
+│   │   ├── reports/             ← pdfmake + QR + /verify/:token
 │   │   ├── results/             ← captura + bulk-save autosave
 │   │   ├── storage/             ← GET /storage/:folder/:file
 │   │   └── users/               ← interno (admin seed)
@@ -215,36 +214,27 @@ lab-backend/
 │   ├── app.module.ts
 │   └── main.ts
 ├── test/
-│   ├── helpers/app.ts           ← bootstrap minimo para e2e
+│   ├── helpers/app.ts           ← bootstrap mínimo para e2e
 │   ├── *.e2e-spec.ts            ← suite end-to-end
 │   ├── jest-e2e.json
 │   └── setup-e2e.ts
-├── scripts/
-│   ├── backup.sh                ← pg_dump + rotación
-│   ├── restore.sh               ← psql restore con confirmación
-│   └── post-deploy-check.sh     ← smoke set para CI/CD
-├── docker/
-│   └── postgres-init.sql        ← gestionado por Prisma extensions ahora
-├── docker-compose.yml           ← Postgres 16 dev (puerto 5434)
-├── docker-compose.prod.yml      ← Postgres + API + sidecar de backup opcional
-├── Dockerfile                   ← multi-stage Alpine + Chromium
-├── railway.json
+├── app.js                       ← entry point Phusion Passenger (carga dist/main.js)
 └── .env.example
 ```
 
 ## Troubleshooting
 
-**`Could not find Chrome` al generar PDF**
-→ Saltamos la descarga interna de Puppeteer. Setea `CHROMIUM_PATH` apuntando a Chrome del sistema. En el `Dockerfile` ya viene configurado a `/usr/bin/chromium-browser` (paquete de Alpine).
+**`Access denied for user` / `Unknown database` al migrar**
+→ Revisa el `DATABASE_URL`. En cPanel el usuario y la base suelen llevar prefijo de cuenta (`cuenta_usuario`, `cuenta_bd`) y el host es `localhost`.
 
 **`drift detected` al correr `prisma migrate dev`**
-→ Hay un índice o función creada manualmente fuera de migrations (ej. `idx_patients_document` del trigram). Soluciones: (a) generar la SQL con `prisma migrate diff` y usar `prisma migrate resolve --applied` para registrarla, o (b) aceptar el reset si la DB es de dev.
+→ Si la carpeta `migrations/` viene de la versión PostgreSQL, bórrala y regenera contra MySQL: `npx prisma migrate dev --name init`, o usa directamente `npx prisma db push`.
+
+**La app no arranca en cPanel tras el deploy**
+→ Verifica que `npm run build` haya generado `dist/main.js` y que el *startup file* sea `app.js`. Revisa el log en *Setup Node.js App* y pulsa **Restart**.
 
 **Tests e2e fallan con 429 al hacer login**
-→ Verifica `NODE_ENV=test`. El `TestAwareThrottlerGuard` skipea el rate-limit solo en ese modo. Si corres los specs con `NODE_ENV=production` el throttle se aplica.
-
-**`port 5434 in use`**
-→ En Windows revisa que no haya un postgres nativo escuchando: `Get-NetTCPConnection -LocalPort 5434`. Stop-Process el PID o cambia el puerto en `docker-compose.yml`.
+→ Verifica `NODE_ENV=test`. El `TestAwareThrottlerGuard` skipea el rate-limit solo en ese modo.
 
 ## Licencia
 

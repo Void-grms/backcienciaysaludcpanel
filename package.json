@@ -9,7 +9,7 @@
   },
   "packageManager": "pnpm@9.0.0",
   "scripts": {
-    "prebuild": "rimraf dist",
+    "prebuild": "rimraf dist && prisma generate",
     "build": "nest build && tsc-alias -p tsconfig.build.json && tsc -p prisma/tsconfig.seed.json",
     "start": "nest start",
     "start:dev": "nest start --watch",

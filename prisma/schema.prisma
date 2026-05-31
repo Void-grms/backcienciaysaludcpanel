@@ -301,8 +301,10 @@ model ReferenceRange {
   displayText        String?             @map("display_text") @db.Text
   priority           Int                 @default(0)
   version            Int                 @default(1)
-  effectiveFrom      DateTime            @default(now()) @map("effective_from") @db.Date
-  effectiveTo        DateTime?           @map("effective_to") @db.Date
+  // MySQL no admite DEFAULT CURRENT_TIMESTAMP en columnas DATE, solo DATETIME.
+  // Usamos DateTime(3); la comparacion en range-resolver usa `new Date()` completo.
+  effectiveFrom      DateTime            @default(now()) @map("effective_from") @db.DateTime(3)
+  effectiveTo        DateTime?           @map("effective_to") @db.DateTime(3)
   createdAt          DateTime            @default(now()) @map("created_at") @db.DateTime(3)
   updatedAt          DateTime            @updatedAt @map("updated_at") @db.DateTime(3)
 

@@ -1,0 +1,604 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  admin
+  reference_user
+  patient
+}
+
+enum UserStatus {
+  active
+  blocked
+  pending_password
+}
+
+enum ResultType {
+  numeric
+  text
+  qualitative
+  observation
+}
+
+enum CatalogStatus {
+  active
+  inactive
+}
+
+enum Sex {
+  M
+  F
+  A
+}
+
+enum PhysiologicalState {
+  none
+  pregnancy
+  lactation
+}
+
+enum ImportJobStatus {
+  pending_confirmation
+  confirmed
+  failed
+  expired
+}
+
+enum DocumentType {
+  DNI
+  CE
+  PAS
+}
+
+enum ReferenceStatus {
+  active
+  inactive
+}
+
+enum OrderState {
+  draft
+  in_progress
+  validated
+  delivered
+  amended
+  cancelled
+}
+
+enum ResultFlag {
+  normal
+  high
+  low
+  critical_high
+  critical_low
+  abnormal
+  none
+}
+
+enum NotificationStatus {
+  pending
+  sent
+  failed
+  skipped
+  no_recipient
+}
+
+enum NotificationChannel {
+  email
+  whatsapp
+}
+
+model User {
+  id                  String     @id @default(uuid()) @db.VarChar(36)
+  email               String?    @unique @db.VarChar(180)
+  documentNumber      String?    @unique @map("document_number") @db.VarChar(20)
+  passwordHash        String     @map("password_hash") @db.VarChar(255)
+  role                UserRole
+  status              UserStatus @default(active)
+  failedLoginAttempts Int        @default(0) @map("failed_login_attempts")
+  lockedUntil         DateTime?  @map("locked_until") @db.DateTime(3)
+  mustChangePassword  Boolean    @default(false) @map("must_change_password")
+  fullName            String?    @map("full_name") @db.VarChar(180)
+  referenceId         String?    @map("reference_id") @db.VarChar(36)
+  reference           Reference? @relation(fields: [referenceId], references: [id], onDelete: SetNull)
+  patientId           String?    @map("patient_id") @db.VarChar(36)
+  patient             Patient?   @relation(fields: [patientId], references: [id], onDelete: SetNull)
+  lastLoginAt         DateTime?  @map("last_login_at") @db.DateTime(3)
+  createdAt           DateTime   @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt           DateTime   @updatedAt @map("updated_at") @db.DateTime(3)
+  deletedAt           DateTime?  @map("deleted_at") @db.DateTime(3)
+
+  refreshTokens       RefreshToken[]
+  passwordResetTokens PasswordResetToken[]
+  ordersCreated       Order[]              @relation("OrderCreatedBy")
+  ordersValidated     Order[]              @relation("OrderValidatedBy")
+  resultsEntered      Result[]
+  orderEvents         OrderEvent[]
+
+  @@index([role, status])
+  @@index([referenceId])
+  @@index([patientId])
+  @@map("users")
+}
+
+model Patient {
+  id             String       @id @default(uuid()) @db.VarChar(36)
+  documentType   DocumentType @map("document_type")
+  documentNumber String       @map("document_number") @db.VarChar(20)
+  firstName      String       @map("first_name") @db.VarChar(80)
+  lastName       String       @map("last_name") @db.VarChar(80)
+  birthDate      DateTime?    @map("birth_date") @db.Date
+  sex            Sex          @default(A)
+  phone          String?      @db.VarChar(20)
+  email          String?      @db.VarChar(180)
+  address        String?      @db.Text
+  notes          String?      @db.Text
+  createdAt      DateTime     @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt      DateTime     @updatedAt @map("updated_at") @db.DateTime(3)
+  deletedAt      DateTime?    @map("deleted_at") @db.DateTime(3)
+
+  users  User[]
+  orders Order[]
+
+  // MySQL no soporta indices parciales. La unicidad documentType+documentNumber
+  // se valida a nivel de servicio excluyendo registros con deletedAt != null.
+  @@index([documentType, documentNumber])
+  @@map("patients")
+}
+
+model Reference {
+  id           String          @id @default(uuid()) @db.VarChar(36)
+  name         String          @db.VarChar(180)
+  taxId        String?         @map("tax_id") @db.VarChar(20)
+  contactName  String?         @map("contact_name") @db.VarChar(120)
+  contactEmail String?         @map("contact_email") @db.VarChar(180)
+  contactPhone String?         @map("contact_phone") @db.VarChar(20)
+  address      String?         @db.Text
+  notes        String?         @db.Text
+  status       ReferenceStatus @default(active)
+  createdAt    DateTime        @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt    DateTime        @updatedAt @map("updated_at") @db.DateTime(3)
+  deletedAt    DateTime?       @map("deleted_at") @db.DateTime(3)
+
+  users  User[]
+  orders Order[]
+
+  @@index([status])
+  @@map("referring_entities")
+}
+
+model RefreshToken {
+  id             String    @id @default(uuid()) @db.VarChar(36)
+  userId         String    @map("user_id") @db.VarChar(36)
+  user           User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  jti            String    @unique @db.VarChar(64)
+  tokenHash      String    @map("token_hash") @db.VarChar(255)
+  userAgent      String?   @map("user_agent") @db.Text
+  ip             String?   @db.VarChar(64)
+  lastActivityAt DateTime  @default(now()) @map("last_activity_at") @db.DateTime(3)
+  lastIp         String?   @map("last_ip") @db.VarChar(64)
+  expiresAt      DateTime  @map("expires_at") @db.DateTime(3)
+  revokedAt      DateTime? @map("revoked_at") @db.DateTime(3)
+  createdAt      DateTime  @default(now()) @map("created_at") @db.DateTime(3)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("refresh_tokens")
+}
+
+model PasswordResetToken {
+  id        String    @id @default(uuid()) @db.VarChar(36)
+  userId    String    @map("user_id") @db.VarChar(36)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String    @unique @map("token_hash") @db.VarChar(255)
+  expiresAt DateTime  @map("expires_at") @db.DateTime(3)
+  usedAt    DateTime? @map("used_at") @db.DateTime(3)
+  createdAt DateTime  @default(now()) @map("created_at") @db.DateTime(3)
+
+  @@index([userId])
+  @@map("password_reset_tokens")
+}
+
+model Professional {
+  id                  String        @id @default(uuid()) @db.VarChar(36)
+  fullName            String        @map("full_name") @db.VarChar(180)
+  professionalTitle   String?       @map("professional_title") @db.VarChar(80)
+  licenseNumber       String?       @map("license_number") @db.VarChar(40)
+  signatureStorageKey String?       @map("signature_storage_key") @db.VarChar(255)
+  status              CatalogStatus @default(active)
+  createdAt           DateTime      @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt           DateTime      @updatedAt @map("updated_at") @db.DateTime(3)
+  deletedAt           DateTime?     @map("deleted_at") @db.DateTime(3)
+
+  defaultForCategories Category[] @relation("CategoryDefaultProfessional")
+  tests                Test[]
+
+  @@map("professionals")
+}
+
+model Category {
+  id                    String        @id @default(uuid()) @db.VarChar(36)
+  name                  String        @unique @db.VarChar(120)
+  description           String?       @db.Text
+  color                 String        @default("#0F766E") @db.VarChar(7)
+  displayOrder          Int           @default(0) @map("display_order")
+  defaultProfessionalId String?       @map("default_professional_id") @db.VarChar(36)
+  defaultProfessional   Professional? @relation("CategoryDefaultProfessional", fields: [defaultProfessionalId], references: [id], onDelete: SetNull)
+  status                CatalogStatus @default(active)
+  createdAt             DateTime      @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt             DateTime      @updatedAt @map("updated_at") @db.DateTime(3)
+  deletedAt             DateTime?     @map("deleted_at") @db.DateTime(3)
+
+  tests Test[]
+
+  @@map("categories")
+}
+
+model Test {
+  id             String        @id @default(uuid()) @db.VarChar(36)
+  code           String        @db.VarChar(40)
+  name           String        @db.VarChar(180)
+  shortName      String?       @map("short_name") @db.VarChar(80)
+  categoryId     String        @map("category_id") @db.VarChar(36)
+  category       Category      @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  resultType     ResultType    @map("result_type")
+  unit           String?       @db.VarChar(40)
+  method         String?       @db.VarChar(120)
+  decimals       Int           @default(2) @db.SmallInt
+  minCritical    Decimal?      @map("min_critical") @db.Decimal(12, 4)
+  maxCritical    Decimal?      @map("max_critical") @db.Decimal(12, 4)
+  referenceText  String?       @map("reference_text") @db.Text
+  professionalId String?       @map("professional_id") @db.VarChar(36)
+  professional   Professional? @relation(fields: [professionalId], references: [id], onDelete: SetNull)
+  status         CatalogStatus @default(active)
+  version        Int           @default(1)
+  createdAt      DateTime      @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt      DateTime      @updatedAt @map("updated_at") @db.DateTime(3)
+  deletedAt      DateTime?     @map("deleted_at") @db.DateTime(3)
+
+  options    TestOption[]
+  ranges     ReferenceRange[]
+  panelTests PanelTest[]
+  orderItems OrderItem[]
+  results    Result[]
+
+  @@index([categoryId])
+  @@index([status])
+  @@index([code])
+  @@map("tests")
+}
+
+model TestOption {
+  id           String   @id @default(uuid()) @db.VarChar(36)
+  testId       String   @map("test_id") @db.VarChar(36)
+  test         Test     @relation(fields: [testId], references: [id], onDelete: Cascade)
+  value        String   @db.VarChar(80)
+  displayOrder Int      @default(0) @map("display_order")
+  createdAt    DateTime @default(now()) @map("created_at") @db.DateTime(3)
+
+  @@unique([testId, value])
+  @@map("test_options")
+}
+
+model ReferenceRange {
+  id                 String              @id @default(uuid()) @db.VarChar(36)
+  testId             String              @map("test_id") @db.VarChar(36)
+  test               Test                @relation(fields: [testId], references: [id], onDelete: Cascade)
+  sex                Sex                 @default(A)
+  ageMinDays         Int?                @map("age_min_days")
+  ageMaxDays         Int?                @map("age_max_days")
+  physiologicalState PhysiologicalState? @map("physiological_state")
+  valueMin           Decimal?            @map("value_min") @db.Decimal(12, 4)
+  valueMax           Decimal?            @map("value_max") @db.Decimal(12, 4)
+  criticalMin        Decimal?            @map("critical_min") @db.Decimal(12, 4)
+  criticalMax        Decimal?            @map("critical_max") @db.Decimal(12, 4)
+  qualitativeExpected String?            @map("qualitative_expected") @db.VarChar(80)
+  displayText        String?             @map("display_text") @db.Text
+  priority           Int                 @default(0)
+  version            Int                 @default(1)
+  effectiveFrom      DateTime            @default(now()) @map("effective_from") @db.Date
+  effectiveTo        DateTime?           @map("effective_to") @db.Date
+  createdAt          DateTime            @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt          DateTime            @updatedAt @map("updated_at") @db.DateTime(3)
+
+  appliedResults Result[]
+
+  @@index([testId, effectiveTo])
+  @@map("reference_ranges")
+}
+
+model TestHistory {
+  id              String        @id @default(uuid()) @db.VarChar(36)
+  testId          String        @map("test_id") @db.VarChar(36)
+  version         Int
+  code            String        @db.VarChar(40)
+  name            String        @db.VarChar(180)
+  shortName       String?       @map("short_name") @db.VarChar(80)
+  categoryId      String        @map("category_id") @db.VarChar(36)
+  resultType      ResultType    @map("result_type")
+  unit            String?       @db.VarChar(40)
+  method          String?       @db.VarChar(120)
+  decimals        Int           @db.SmallInt
+  minCritical     Decimal?      @map("min_critical") @db.Decimal(12, 4)
+  maxCritical     Decimal?      @map("max_critical") @db.Decimal(12, 4)
+  referenceText   String?       @map("reference_text") @db.Text
+  professionalId  String?       @map("professional_id") @db.VarChar(36)
+  status          CatalogStatus
+  validFrom       DateTime      @map("valid_from") @db.DateTime(3)
+  validTo         DateTime?     @map("valid_to") @db.DateTime(3)
+  changedByUserId String?       @map("changed_by_user_id") @db.VarChar(36)
+  createdAt       DateTime      @default(now()) @map("created_at") @db.DateTime(3)
+
+  @@index([testId, version])
+  @@map("tests_history")
+}
+
+model ReferenceRangeHistory {
+  id                  String              @id @default(uuid()) @db.VarChar(36)
+  rangeId             String              @map("range_id") @db.VarChar(36)
+  testId              String              @map("test_id") @db.VarChar(36)
+  version             Int
+  sex                 Sex
+  ageMinDays          Int?                @map("age_min_days")
+  ageMaxDays          Int?                @map("age_max_days")
+  physiologicalState  PhysiologicalState? @map("physiological_state")
+  valueMin            Decimal?            @map("value_min") @db.Decimal(12, 4)
+  valueMax            Decimal?            @map("value_max") @db.Decimal(12, 4)
+  criticalMin         Decimal?            @map("critical_min") @db.Decimal(12, 4)
+  criticalMax         Decimal?            @map("critical_max") @db.Decimal(12, 4)
+  qualitativeExpected String?             @map("qualitative_expected") @db.VarChar(80)
+  displayText         String?             @map("display_text") @db.Text
+  priority            Int
+  validFrom           DateTime            @map("valid_from") @db.DateTime(3)
+  validTo             DateTime?           @map("valid_to") @db.DateTime(3)
+  changedByUserId     String?             @map("changed_by_user_id") @db.VarChar(36)
+  createdAt           DateTime            @default(now()) @map("created_at") @db.DateTime(3)
+
+  @@index([rangeId, version])
+  @@index([testId])
+  @@map("reference_ranges_history")
+}
+
+model Panel {
+  id                    String        @id @default(uuid()) @db.VarChar(36)
+  code                  String        @db.VarChar(40)
+  name                  String        @db.VarChar(180)
+  description           String?       @db.Text
+  defaultProfessionalId String?       @map("default_professional_id") @db.VarChar(36)
+  status                CatalogStatus @default(active)
+  createdAt             DateTime      @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt             DateTime      @updatedAt @map("updated_at") @db.DateTime(3)
+  deletedAt             DateTime?     @map("deleted_at") @db.DateTime(3)
+
+  panelTests PanelTest[]
+  orderItems OrderItem[]
+
+  @@index([status])
+  @@index([code])
+  @@map("panels")
+}
+
+model PanelTest {
+  panelId      String   @map("panel_id") @db.VarChar(36)
+  testId       String   @map("test_id") @db.VarChar(36)
+  displayOrder Int      @default(0) @map("display_order")
+  createdAt    DateTime @default(now()) @map("created_at") @db.DateTime(3)
+
+  panel Panel @relation(fields: [panelId], references: [id], onDelete: Cascade)
+  test  Test  @relation(fields: [testId], references: [id], onDelete: Cascade)
+
+  @@id([panelId, testId])
+  @@index([testId])
+  @@map("panel_tests")
+}
+
+model ImportJob {
+  id              String          @id @default(uuid()) @db.VarChar(36)
+  type            String          @db.VarChar(40)
+  status          ImportJobStatus @default(pending_confirmation)
+  createdByUserId String?         @map("created_by_user_id") @db.VarChar(36)
+  filename        String?         @db.VarChar(255)
+  summary         Json
+  payload         Json
+  errors          Json
+  expiresAt       DateTime        @map("expires_at") @db.DateTime(3)
+  confirmedAt     DateTime?       @map("confirmed_at") @db.DateTime(3)
+  createdAt       DateTime        @default(now()) @map("created_at") @db.DateTime(3)
+
+  @@index([status])
+  @@index([createdByUserId])
+  @@map("import_jobs")
+}
+
+model Order {
+  id                String     @id @default(uuid()) @db.VarChar(36)
+  code              String     @unique @db.VarChar(20)
+  patientId         String     @map("patient_id") @db.VarChar(36)
+  patient           Patient    @relation(fields: [patientId], references: [id], onDelete: Restrict)
+  referenceId       String?    @map("reference_id") @db.VarChar(36)
+  reference         Reference? @relation(fields: [referenceId], references: [id], onDelete: SetNull)
+  requestingDoctor  String?    @map("requesting_doctor") @db.VarChar(180)
+  clinicalInfo      String?    @map("clinical_info") @db.Text
+  sampleTakenAt     DateTime?  @map("sample_taken_at") @db.DateTime(3)
+  state             OrderState @default(draft)
+  stateReason       String?    @map("state_reason") @db.Text
+  validatedAt       DateTime?  @map("validated_at") @db.DateTime(3)
+  deliveredAt       DateTime?  @map("delivered_at") @db.DateTime(3)
+  cancelledAt       DateTime?  @map("cancelled_at") @db.DateTime(3)
+  previousOrderId   String?    @map("previous_order_id") @db.VarChar(36)
+  previousOrder     Order?     @relation("OrderAmendment", fields: [previousOrderId], references: [id], onDelete: SetNull)
+  amendments        Order[]    @relation("OrderAmendment")
+  createdByUserId   String?    @map("created_by_user_id") @db.VarChar(36)
+  createdBy         User?      @relation("OrderCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  validatedByUserId String?    @map("validated_by_user_id") @db.VarChar(36)
+  validatedBy       User?      @relation("OrderValidatedBy", fields: [validatedByUserId], references: [id], onDelete: SetNull)
+  createdAt         DateTime   @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt         DateTime   @updatedAt @map("updated_at") @db.DateTime(3)
+  deletedAt         DateTime?  @map("deleted_at") @db.DateTime(3)
+
+  items   OrderItem[]
+  results Result[]
+  events  OrderEvent[]
+  reports Report[]
+
+  @@index([patientId, state])
+  @@index([referenceId, state])
+  @@index([state, deliveredAt])
+  @@map("orders")
+}
+
+model OrderItem {
+  id           String   @id @default(uuid()) @db.VarChar(36)
+  orderId      String   @map("order_id") @db.VarChar(36)
+  order        Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  testId       String   @map("test_id") @db.VarChar(36)
+  test         Test     @relation(fields: [testId], references: [id], onDelete: Restrict)
+  testVersion  Int      @map("test_version")
+  panelId      String?  @map("panel_id") @db.VarChar(36)
+  panel        Panel?   @relation(fields: [panelId], references: [id], onDelete: SetNull)
+  displayOrder Int      @default(0) @map("display_order")
+  createdAt    DateTime @default(now()) @map("created_at") @db.DateTime(3)
+
+  result Result?
+
+  @@unique([orderId, testId])
+  @@index([orderId])
+  @@map("order_items")
+}
+
+model Result {
+  id              String          @id @default(uuid()) @db.VarChar(36)
+  orderId         String          @map("order_id") @db.VarChar(36)
+  order           Order           @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  orderItemId     String          @unique @map("order_item_id") @db.VarChar(36)
+  orderItem       OrderItem       @relation(fields: [orderItemId], references: [id], onDelete: Cascade)
+  testId          String          @map("test_id") @db.VarChar(36)
+  test            Test            @relation(fields: [testId], references: [id], onDelete: Restrict)
+  valueNumeric    Decimal?        @map("value_numeric") @db.Decimal(12, 4)
+  valueText       String?         @map("value_text") @db.Text
+  appliedRangeId  String?         @map("applied_range_id") @db.VarChar(36)
+  appliedRange    ReferenceRange? @relation(fields: [appliedRangeId], references: [id], onDelete: SetNull)
+  flag            ResultFlag      @default(none)
+  observation     String?         @db.Text
+  enteredByUserId String?         @map("entered_by_user_id") @db.VarChar(36)
+  enteredBy       User?           @relation(fields: [enteredByUserId], references: [id], onDelete: SetNull)
+  enteredAt       DateTime?       @map("entered_at") @db.DateTime(3)
+  createdAt       DateTime        @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt       DateTime        @updatedAt @map("updated_at") @db.DateTime(3)
+
+  @@index([orderId])
+  @@index([testId])
+  @@map("results")
+}
+
+model OrderEvent {
+  id          String     @id @default(uuid()) @db.VarChar(36)
+  orderId     String     @map("order_id") @db.VarChar(36)
+  order       Order      @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  fromState   OrderState @map("from_state")
+  toState     OrderState @map("to_state")
+  actorUserId String?    @map("actor_user_id") @db.VarChar(36)
+  actor       User?      @relation(fields: [actorUserId], references: [id], onDelete: SetNull)
+  reason      String?    @db.Text
+  createdAt   DateTime   @default(now()) @map("created_at") @db.DateTime(3)
+
+  @@index([orderId, createdAt])
+  @@map("order_events")
+}
+
+model OrderSequence {
+  year       Int    @id
+  lastNumber BigInt @default(0) @map("last_number")
+
+  @@map("order_sequences")
+}
+
+model Report {
+  id                String   @id @default(uuid()) @db.VarChar(36)
+  orderId           String   @map("order_id") @db.VarChar(36)
+  order             Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  version           Int      @default(1)
+  pdfStorageKey     String   @map("pdf_storage_key") @db.VarChar(255)
+  hashSha256        String   @map("hash_sha256") @db.VarChar(64)
+  generatedByUserId String?  @map("generated_by_user_id") @db.VarChar(36)
+  generatedAt       DateTime @default(now()) @map("generated_at") @db.DateTime(3)
+
+  tokens ReportToken[]
+
+  @@unique([orderId, version])
+  @@index([orderId])
+  @@map("reports")
+}
+
+model ReportToken {
+  id        String    @id @default(uuid()) @db.VarChar(36)
+  reportId  String    @map("report_id") @db.VarChar(36)
+  report    Report    @relation(fields: [reportId], references: [id], onDelete: Cascade)
+  token     String    @unique @db.VarChar(64)
+  expiresAt DateTime? @map("expires_at") @db.DateTime(3)
+  createdAt DateTime  @default(now()) @map("created_at") @db.DateTime(3)
+
+  @@index([reportId])
+  @@map("report_tokens")
+}
+
+model NotificationsLog {
+  id           String              @id @default(uuid()) @db.VarChar(36)
+  orderId      String?             @map("order_id") @db.VarChar(36)
+  channel      NotificationChannel @default(email)
+  recipient    String              @db.VarChar(180)
+  template     String              @db.VarChar(80)
+  subject      String?             @db.VarChar(255)
+  status       NotificationStatus  @default(pending)
+  providerId   String?             @map("provider_id") @db.VarChar(120)
+  errorMessage String?             @map("error_message") @db.Text
+  metadata     Json?
+  createdAt    DateTime            @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt    DateTime            @updatedAt @map("updated_at") @db.DateTime(3)
+
+  @@index([orderId])
+  @@index([status, createdAt])
+  @@map("notifications_log")
+}
+
+model LabConfig {
+  id             String   @id @default(uuid()) @db.VarChar(36)
+  commercialName String   @map("commercial_name") @db.VarChar(180)
+  taxId          String?  @map("tax_id") @db.VarChar(20)
+  address        String?  @db.Text
+  phone          String?  @db.VarChar(40)
+  email          String?  @db.VarChar(180)
+  logoStorageKey String?  @map("logo_storage_key") @db.VarChar(255)
+  primaryColor   String   @default("#0F766E") @map("primary_color") @db.VarChar(7)
+  headerHtml     String?  @map("header_html") @db.Text
+  footerHtml     String?  @map("footer_html") @db.Text
+  createdAt      DateTime @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt      DateTime @updatedAt @map("updated_at") @db.DateTime(3)
+
+  @@map("lab_config")
+}
+
+model AuditLog {
+  id          String   @id @default(uuid()) @db.VarChar(36)
+  action      String   @db.VarChar(80)
+  entityType  String   @map("entity_type") @db.VarChar(40)
+  entityId    String?  @map("entity_id") @db.VarChar(64)
+  actorUserId String?  @map("actor_user_id") @db.VarChar(36)
+  actorRole   String?  @map("actor_role") @db.VarChar(40)
+  summary     String?  @db.Text
+  metadata    Json?
+  ipAddress   String?  @map("ip_address") @db.VarChar(64)
+  userAgent   String?  @map("user_agent") @db.VarChar(255)
+  createdAt   DateTime @default(now()) @map("created_at") @db.DateTime(3)
+
+  @@index([entityType, entityId])
+  @@index([actorUserId])
+  @@index([action, createdAt])
+  @@index([createdAt])
+  @@map("audit_log")
+}

@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint-test:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: lab
+          POSTGRES_PASSWORD: lab
+          POSTGRES_DB: lab
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd="pg_isready -U lab -d lab"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
+
+    env:
+      DATABASE_URL: postgresql://lab:lab@localhost:5432/lab?schema=public
+      JWT_SECRET: ci-secret-please-rotate-in-production-32chars
+      NODE_ENV: test
+
+    steps:
+      - uses: actions/checkout@v4
+      # No declaramos `version` aqui: la accion la lee de package.json#packageManager
+      # (pnpm@9.0.0). Si las dos coexisten, action-setup@v4 falla con
+      # ERR_PNPM_BAD_PM_VERSION.
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm db:generate
+      - run: pnpm lint:check
+      - run: pnpm typecheck
+      - run: pnpm db:migrate:deploy
+      # Seed minimo: admin + lab_config + categorias. Los e2e usan el admin
+      # para autenticarse, asi que es requisito del job.
+      - run: pnpm db:seed
+      - run: pnpm test:e2e

@@ -46,25 +46,24 @@ async function seedPatientUser() {
   const bcryptCost = Number(process.env.PASSWORD_BCRYPT_COST ?? 12);
   const documentNumber = '12345678';
 
-  const patient = await prisma.patient.upsert({
-    where: {
-      documentType_documentNumber: {
+  // MySQL no soporta indices unicos parciales, asi que documentType+documentNumber
+  // es solo un @@index. Hacemos findFirst + create en lugar de upsert.
+  const patient =
+    (await prisma.patient.findFirst({
+      where: { documentType: DocumentType.DNI, documentNumber, deletedAt: null },
+    })) ??
+    (await prisma.patient.create({
+      data: {
         documentType: DocumentType.DNI,
         documentNumber,
+        firstName: 'Maria',
+        lastName: 'Paciente Demo',
+        birthDate: new Date('1990-05-15'),
+        sex: Sex.F,
+        phone: '+51999111222',
+        email: 'paciente.demo@laboratorio.com',
       },
-    },
-    update: {},
-    create: {
-      documentType: DocumentType.DNI,
-      documentNumber,
-      firstName: 'Maria',
-      lastName: 'Paciente Demo',
-      birthDate: new Date('1990-05-15'),
-      sex: Sex.F,
-      phone: '+51999111222',
-      email: 'paciente.demo@laboratorio.com',
-    },
-  });
+    }));
 
   const passwordHash = await bcrypt.hash('Paciente123!', bcryptCost);
   const user = await prisma.user.upsert({

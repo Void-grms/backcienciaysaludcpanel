@@ -28,7 +28,7 @@ Copy-Item .env.example .env
 
 # 3. Generar el cliente Prisma y aplicar el esquema a MySQL
 pnpm db:generate
-pnpm db:migrate:deploy   # o `pnpm db:push` si aún no hay migraciones MySQL
+pnpm db:push   # sincroniza el schema con la BD (sin historial de migraciones)
 
 # 4. Sembrar admin + lab_config + catálogo demo
 pnpm db:seed
@@ -77,8 +77,8 @@ Todos los errores siguen el formato **RFC 7807** (`application/problem+json`).
 | `pnpm typecheck` | `tsc --noEmit` |
 | `pnpm test` | Tests unitarios (jest) |
 | `pnpm test:e2e` | Suite e2e contra MySQL real (admin sembrado) |
-| `pnpm db:migrate` | Migración dev (genera SQL y aplica) |
-| `pnpm db:migrate:deploy` | Aplica migraciones pendientes (CI / prod) |
+| `pnpm db:push` | Sincroniza `schema.prisma` con la BD MySQL (sin migraciones) |
+| `pnpm db:deploy` | `db push` + seed (comando único de despliegue) |
 | `pnpm db:seed` | Carga admin + lab_config + categorías + test demo |
 | `pnpm db:studio` | Abre Prisma Studio |
 
@@ -147,7 +147,7 @@ cd ~/apps/lab-backend
 
 npm install
 npm run build
-npx prisma migrate deploy   # o `npx prisma db push`
+npx prisma db push           # crea/sincroniza las tablas en MySQL
 node dist/prisma/seed.js     # admin + lab_config + catálogo demo
 ```
 
@@ -182,8 +182,8 @@ Configurado out-of-the-box:
 lab-backend/
 ├── prisma/
 │   ├── schema.prisma            ← 25+ modelos, datasource = mysql
-│   ├── migrations/              ← migraciones SQL versionadas
-│   └── seed.ts                  ← admin + lab_config + categorías + test demo
+│   ├── seed.ts                  ← admin + lab_config + categorías + test demo
+│   └── seed-catalog.ts          ← catálogo demo (categorías + tests)
 ├── src/
 │   ├── config/                  ← env validation (Zod) + swagger
 │   ├── modules/
@@ -227,8 +227,8 @@ lab-backend/
 **`Access denied for user` / `Unknown database` al migrar**
 → Revisa el `DATABASE_URL`. En cPanel el usuario y la base suelen llevar prefijo de cuenta (`cuenta_usuario`, `cuenta_bd`) y el host es `localhost`.
 
-**`drift detected` al correr `prisma migrate dev`**
-→ Si la carpeta `migrations/` viene de la versión PostgreSQL, bórrala y regenera contra MySQL: `npx prisma migrate dev --name init`, o usa directamente `npx prisma db push`.
+**Quiero historial de migraciones en vez de `db push`**
+→ Este proyecto usa `prisma db push` (schema-first, sin carpeta `migrations/`), ideal para hosting compartido. Si necesitás migraciones versionadas, generá la primera contra una BD MySQL: `npx prisma migrate dev --name init`.
 
 **La app no arranca en cPanel tras el deploy**
 → Verifica que `npm run build` haya generado `dist/main.js` y que el *startup file* sea `app.js`. Revisa el log en *Setup Node.js App* y pulsa **Restart**.
